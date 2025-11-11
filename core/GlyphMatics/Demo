@@ -1,0 +1,4 @@
+git clone https://github.com/Nine1Eight/unified-glyphmatic-tensor.git
+cd unified-glyphmatic-tensor
+pip install -e .[test]
+python -m glyphmatics.component
