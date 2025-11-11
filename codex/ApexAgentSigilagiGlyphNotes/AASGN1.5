@@ -1,0 +1,215 @@
+============================================================
+
+APEX-AGENT-SIGILAGI-GLYPHNOTES v1.5 — GRAND (FULL & FINAL)
+
+SGNULTIMATE — ApexAgentSigilagi (ARC-AGI-2 Offline Solver)
+
+System: MaestroCore + Sigilagi Core + GlyphNotes Codex + MSC-2 Meta-Learning
+
+Fully Offline • Deterministic • ARC-Compliant
+
+============================================================
+
+import json, time, hashlib, zipfile from pathlib import Path import numpy as np
+
+VERSION = "v1.5-GRAND"
+
+---------------------- Paths & Logger -----------------------
+
+BASE = Path("/kaggle/input/arc-prize-2025") WORK = Path("/kaggle/working"); WORK.mkdir(parents=True, exist_ok=True) CODEX_PATH_IN = Path("/kaggle/input/glyphnotes-codex/glyphnotes_codex_total_autoboot.json") CODEX_PATH_OUT = WORK / "glyphnotes_codex_total_autoboot.json" CLUSTERS_PATH = WORK / "glyph_cluster_prefs.json"
+
+def log(tag, msg): print(f"[{tag}] {msg}")
+
+log("BOOT", f"ApexAgentSigilagi {VERSION} initializing…")
+
+---------------------- Safe JSON Loader ---------------------
+
+def load_json(path): try: with open(path, "r", encoding="utf-8") as f: return json.load(f) except Exception as e: log("LOAD", f"{path.name} load error: {e}") return None
+
+---------------------- ARC Task Loader ----------------------
+
+def _pairs(task_like): pairs = [] if isinstance(task_like, dict) and "train" in task_like: for p in task_like["train"]: if "input" in p and "output" in p: pairs.append({ "input": np.array(p["input"], dtype=int), "output": np.array(p["output"], dtype=int) }) return pairs
+
+def load_arc_tasks(): files = [ BASE / "arc-agi_training_solutions.json", BASE / "arc-agi_evaluation_solutions.json", BASE / "arc-agi_evaluation_challenges.json", BASE / "arc-agi_test_challenges.json", BASE / "arc_agi_training_solutions.json", BASE / "arc_agi_evaluation_solutions.json", BASE / "arc_agi_evaluation_challenges.json", BASE / "arc_agi_test_challenges.json", ] tasks = [] for p in files: if not p.exists(): continue data = load_json(p) if data is None: continue if isinstance(data, dict): for tid, obj in data.items(): pr = pairs(obj) if pr: tasks.append({"id": tid, "train": pr}) elif isinstance(data, list): for i, obj in enumerate(data): if isinstance(obj, dict): tid = obj.get("id", f"{p.stem}{i}") pr = _pairs(obj) if pr: tasks.append({"id": tid, "train": pr}) if not tasks: log("ARC", "No ARC JSON found; using deterministic demo.") tasks = [{"id": "demo_rotate", "train": [ {"input": np.array([[1, 2], [3, 4]]), "output": np.array([[3, 1], [4, 2]])} ]}] log("ARC", f"Loaded tasks: {len(tasks)}") return tasks
+
+============================================================
+
+Glyph Operators (Core, Conditional, Resizing, Recursive)
+
+============================================================
+
+Geometry
+
+def R90(a): return np.rot90(a, -1)
+
+def R180(a): return np.rot90(a, 2)
+
+def R270(a): return np.rot90(a, 1)
+
+def FLIPH(a): return np.fliplr(a)
+
+def FLIPV(a): return np.flipud(a)
+
+def TRANSPOSE(a): return np.transpose(a)
+
+Pool/Mode & Morphology
+
+def pool2x2_max(a): a = np.asarray(a); H, W = (a.shape[0]//2)*2, (a.shape[1]//2)*2 if H == 0 or W == 0: return a.copy() a = a[:H, :W] return np.maximum.reduce([ a[0::2, 0::2], a[0::2, 1::2], a[1::2, 0::2], a[1::2, 1::2] ])
+
+def pool2x2_mode(a): a = np.asarray(a); H, W = (a.shape[0]//2)*2, (a.shape[1]//2)*2 if H == 0 or W == 0: return a.copy() a = a[:H, :W] out = np.zeros((H//2, W//2), dtype=a.dtype) for y in range(0, H, 2): for x in range(0, W, 2): b = a[y:y+2, x:x+2].ravel() vals, c = np.unique(b, return_counts=True) out[y//2, x//2] = vals[np.argmax(c)] return out
+
+def morph_close(a): a = np.asarray(a); vals = np.unique(a) def dilate(b): h, w = b.shape; out = b.copy() for dy in (-1, 0, 1): for dx in (-1, 0, 1): if dy == dx == 0: continue ys = slice(max(0, dy), min(h, h+dy)); xs = slice(max(0, dx), min(w, w+dx)) ys2 = slice(max(0, -dy), min(h, h-dy)); xs2 = slice(max(0, -dx), min(w, w-dx)) sh = np.zeros_like(b); sh[ys, xs] = b[ys2, xs2]; out |= sh return out def erode(b): h, w = b.shape; out = b.copy() for dy in (-1, 0, 1): for dx in (-1, 0, 1): if dy == dx == 0: continue ys = slice(max(0, dy), min(h, h+dy)); xs = slice(max(0, dx), min(w, w+dx)) ys2 = slice(max(0, -dy), min(h, h-dy)); xs2 = slice(max(0, -dx), min(w, w-dx)) sh = np.zeros_like(b); sh[ys, xs] = b[ys2, xs2]; out &= sh return out freq = {int(v): int((a == v).sum()) for v in vals} order = sorted(vals, key=lambda v: -freq[int(v)]) out = np.zeros_like(a) for v in order: b = (a == v) layer = erode(dilate(b)) out = np.where(layer, v, out) return out
+
+Shifts
+
+def shift_right(a): return np.roll(a, 1, axis=1)
+
+def shift_left(a): return np.roll(a, -1, axis=1)
+
+def shift_up(a): return np.roll(a, -1, axis=0)
+
+def shift_down(a): return np.roll(a, 1, axis=0)
+
+Color / arithmetic
+
+def palette_remap(a): a = np.asarray(a) vals, c = np.unique(a, return_counts=True) order = np.argsort(-c) mapping = {int(vals[i]): int(i) for i in order} return np.vectorize(lambda v: mapping.get(int(v), int(v)))(a)
+
+def inc1_mod(a): return (np.asarray(a) + 1) % 10
+
+def dec1_mod(a): return (np.asarray(a) + 9) % 10
+
+def add3_mod(a): return (np.asarray(a) + 3) % 10
+
+def mul2_mod(a): return (np.asarray(a) * 2) % 10
+
+Resizing / tiling
+
+def scale2x(a): return np.kron(np.asarray(a), np.ones((2, 2), dtype=int))
+
+def shrink2(a): return pool2x2_mode(a)
+
+def tile2x2(a): return np.tile(np.asarray(a), (2, 2))
+
+Conditional
+
+def most_freq_color(a): vals, c = np.unique(a, return_counts=True) return int(vals[np.argmax(c)]) if len(vals) else 0
+
+def least_freq_color(a): vals, c = np.unique(a, return_counts=True) return int(vals[np.argmin(c)]) if len(vals) else 0
+
+def Ωif_color_eq(a): c = most_freq_color(a); lf = least_freq_color(a) b = np.asarray(a).copy(); b[a == c] = lf; return b
+
+def Ωif_color_not(a): c = most_freq_color(a); b = np.asarray(a).copy(); b[a != c] = c; return b
+
+def Ωcount_mask(a): a = np.asarray(a); h, w = a.shape; out = np.zeros_like(a) for y in range(h): for x in range(w): val = a[y, x]; cnt = 0 for dy, dx in ((-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)): yy, xx = y+dy, x+dx if 0 <= yy < h and 0 <= xx < w and a[yy, xx] == val: cnt += 1 out[y, x] = cnt % 10 return out
+
+def _largest_cc_mask(a, color): a = np.asarray(a); h, w = a.shape; seen = np.zeros((h, w), dtype=bool) best_mask = None; best_size = 0 for y in range(h): for x in range(w): if seen[y, x] or a[y, x] != color: continue q = [(y, x)]; comp = []; seen[y, x] = True while q: cy, cx = q.pop(); comp.append((cy, cx)) for dy, dx in ((-1,0),(1,0),(0,-1),(0,1)): ny, nx = cy+dy, cx+dx if 0 <= ny < h and 0 <= nx < w and not seen[ny, nx] and a[ny, nx] == color: seen[ny, nx] = True; q.append((ny, nx)) if len(comp) > best_size: best_size = len(comp); m = np.zeros((h, w), dtype=bool) for (yy, xx) in comp: m[yy, xx] = True best_mask = m return best_mask
+
+def Ωcopy_mask(a): vals = np.unique(a) best_m = None; best_sz = 0; best_color = 0 for v in vals: m = _largest_cc_mask(a, v) if m is None: continue sz = int(m.sum()) if sz > best_sz: best_sz = sz; best_m = m; best_color = int(v) out = np.zeros_like(a) if best_m is not None: out[best_m] = best_color return out
+
+def Ωconditional_fill(a): nz = np.asarray(a)[np.asarray(a) != 0]; c = most_freq_color(nz) if nz.size else 0 b = np.asarray(a).copy(); b[b == 0] = c; return b
+
+---------------------- Registry ------------------------------
+
+GLYPH_FUN = { # geometry "R90": R90, "R180": R180, "R270": R270, "FLIPH": FLIPH, "FLIPV": FLIPV, "TRANSPOSE": TRANSPOSE, # pooling & morphology "Ωpool_mode": pool2x2_mode, "Ωpool_max": pool2x2_max, "Ωmorph_close": morph_close, # shifts "Ωshift_right": shift_right, "Ωshift_left": shift_left, "Ωshift_up": shift_up, "Ωshift_down": shift_down, # palette & arithmetic "Ωpalette_remap": palette_remap, "Ωinc1": inc1_mod, "Ωdec1": dec1_mod, "Ωadd3": add3_mod, "Ωmul2": mul2_mod, # resizing / tiling "Ωscale2x": scale2x, "Ωshrink2": shrink2, "Ωtile2x2": tile2x2, # conditional "Ωif_color_eq": Ωif_color_eq, "Ωif_color_not": Ωif_color_not, "Ωcount_mask": Ωcount_mask, "Ωcopy_mask": Ωcopy_mask, "Ωconditional_fill": Ωconditional_fill, } GEOM_OPS = ["R90", "R180", "R270", "FLIPH", "FLIPV", "TRANSPOSE"] ALL_OPS = list(GLYPH_FUN.keys())
+
+---------------------- Codex & Cluster Prefs -----------------
+
+v1.5-GRAND: Hardcoded Codex (no file I/O)
+
+try: from embedded_codex_hardcoded import CODEX as CODEX log("CODEX", f"Hardcoded codex loaded ({len(CODEX)} signatures).") except Exception as e: # Fallback to file-based load if hardcoded module not available if CODEX_PATH_IN.exists(): CODEX = load_json(CODEX_PATH_IN) or {} else: CODEX = load_json(CODEX_PATH_OUT) or {} log("CODEX", f"Loaded codex with {len(CODEX)} signatures (fallback). Error: {e}")
+
+CLUSTER_PREFS = load_json(CLUSTERS_PATH) or {} # {cluster_key: {op:count}} log("CLUSTERS", f"Loaded cluster prefs for {len(CLUSTER_PREFS)} clusters.")
+
+---------------------- Signatures & Refined Clustering -------
+
+def grid_signature(a): a = np.asarray(a) vals, c = np.unique(a, return_counts=True) h = hashlib.sha256() h.update(str(a.shape).encode()) h.update(bytes(vals.tolist())) h.update(bytes((c % 251).tolist())) return h.hexdigest()[:16]
+
+def task_signature(task): p = task["train"][0] return f"{grid_signature(p['input'])}->{grid_signature(p['output'])}"
+
+def symmetry_flags(a): a = np.asarray(a) fh = int(np.array_equal(a, FLIPH(a))) fv = int(np.array_equal(a, FLIPV(a))) t = int(np.array_equal(a, TRANSPOSE(a))) return fh, fv, t
+
+def approx_translation(a, b): a = np.asarray(a); b = np.asarray(b) if a.shape != b.shape: return 0 h, w = a.shape best = 0 for dx in (0, 1, -1, 2, -2): for dy in (0, 1, -1, 2, -2): y = np.roll(np.roll(a, dx, axis=1), dy, axis=0) best = max(best, (y == b).mean()) return best
+
+def cluster_key(task): # Multi-dimensional feature extraction p = task["train"][0] a, b = p["input"], p["output"] ha, wa = a.shape; hb, wb = b.shape na, nb = np.unique(a).size, np.unique(b).size fh, fv, t = symmetry_flags(a) bg_a = float((a == 0).sum()) / a.size bg_b = float((b == 0).sum()) / b.size ratioH = round(hb / max(1, ha), 2); ratioW = round(wb / max(1, wa), 2) scaled = int((hb % ha == 0 and wb % wa == 0) or (ha % hb == 0 and wa % wb == 0)) moved = approx_translation(a, b) palette_delta = int(nb - na) bins = "low" if na <= 3 else ("mid" if na <= 6 else "high") return ( f"sz={ha}x{wa}->{hb}x{wb}|scale={scaled}|ratio={ratioH}x{ratioW}|" f"col={bins}({palette_delta})|bg={int(bg_a10)}->{int(bg_b10)}|sym={fh}{fv}{t}|move={int(moved*10)}" )
+
+def order_ops_for_cluster(base_ops, key): prefs = CLUSTER_PREFS.get(key, {}) def score(op): # prefer previously-successful ops; prefer geometry early return (-int(prefs.get(op, 0)), 0 if op in GEOM_OPS else 1, op) return sorted(base_ops, key=score)
+
+---------------------- Heuristics & Dynamic Beam -------------
+
+def apply_combo(a, combo): x = np.array(a, copy=True) for op in combo: x = GLYPH_FUNop return x
+
+def exact_fit(task, combo): for p in task["train"]: y = apply_combo(p["input"], combo) if y.shape != p["output"].shape or not np.array_equal(y, p["output"]): return False return True
+
+def pair_fit_score(a, b): H = min(a.shape[0], b.shape[0]); W = min(a.shape[1], b.shape[1]) if H == 0 or W == 0: return 0.0 return float((a[:H, :W] == b[:H, :W]).sum()) / (H * W)
+
+def heuristic_score(task, combo): p = task["train"][0] try: y = apply_combo(p["input"], combo) if y.shape == p["output"].shape and np.array_equal(y, p["output"]): return 1.0 base = 0.5 * pair_fit_score(y, p["output"]) # coarse structure match cols = len(set(np.unique(y)) & set(np.unique(p["output"])))/max(1, len(np.unique(p["output"]))) trans = approx_translation(y, p["output"]) if y.shape == p["output"].shape else 0.0 return max(0.0, min(0.99, base + 0.25cols + 0.25trans)) except Exception: return 0.0
+
+def dynamic_beam_width(task): p = task["train"][0] ha, wa = p["input"].shape; hb, wb = p["output"].shape colors = np.unique(p["input"]).size + np.unique(p["output"]).size area = ha * wa + hb * wb scale_hint = int((hb % ha == 0 and wb % wa == 0) or (ha % hb == 0 and wa % wb == 0)) base = 32 if area > 900: base += 16 if colors > 10: base += 16 if scale_hint: base += 16 return min(128, base)
+
+---------------------- Rare Combos ---------------------------
+
+RARE_COMBOS = { "count_to_color": [["Ωcount_mask", "Ωpalette_remap"]], "expand_by_ratio": [["Ωscale2x", "Ωconditional_fill"], ["Ωtile2x2", "Ωconditional_fill"]], "mirror_quad": [["FLIPH", "FLIPV", "Ωtile2x2"], ["FLIPV", "FLIPH", "Ωtile2x2"]], "color_cycle": [["Ωinc1", "Ωinc1"], ["Ωadd3", "Ωpalette_remap"]], "rotate_repeat": [["R90", "R90", "R90"], ["R180", "R180"]], "shape_morph": [["Ωmorph_close", "Ωconditional_fill"]], "shift_loop": [["Ωshift_right", "Ωshift_down", "Ωshift_right", "Ωshift_down"]], "pattern_growth": [["Ωtile2x2", "Ωconditional_fill"]], }
+
+def detect_rare_pattern(task): p = task["train"][0] a, b = p["input"], p["output"] ha, wa = a.shape; hb, wb = b.shape na, nb = np.unique(a).size, np.unique(b).size if (hb >= 2ha and wb >= 2wa) or ((hb % ha == 0) and (wb % wa == 0)): return "expand_by_ratio" if nb >= na + 2: return "color_cycle" if np.array_equal(FLIPH(a), FLIPV(b)) or np.array_equal(FLIPV(a), FLIPH(b)): return "mirror_quad" if (a != b).sum() > 0.7 * a.size and nb == na: return "rotate_repeat" if count_objects(a=True) != count_objects(b=True): return "count_to_color" return None
+
+---------------------- Recursive Op Injection ----------------
+
+def count_objects(a, ignore_zero=True): a = np.asarray(a); h, w = a.shape; seen = np.zeros((h, w), dtype=bool); cnt = 0 for y in range(h): for x in range(w): if seen[y, x]: continue val = a[y, x] if ignore_zero and val == 0: seen[y, x] = True; continue q = [(y, x)]; seen[y, x] = True while q: cy, cx = q.pop() for dy, dx in ((-1,0),(1,0),(0,-1),(0,1)): ny, nx = cy+dy, cx+dx if 0 <= ny < h and 0 <= nx < w and not seen[ny, nx] and a[ny, nx] == val: seen[ny, nx] = True; q.append((ny, nx)) cnt += 1 return cnt
+
+def repeat_apply(a, op_func, n): x = np.asarray(a) for _ in range(max(0, int(n))): x = op_func(x) return x
+
+def ensure_recursive_ops_for_task(task): p = task["train"][0] a, b = p["input"], p["output"] ha, wa = a.shape; hb, wb = b.shape
+
+# counts from structure hints objN = max(1, min(5, count_objects(a))) counts = sorted({objN, 2, 3}) if hb == 2*ha and wb == 2*wa: counts.append(2) counts = sorted(set(c for c in counts if 1 <= c <= 5)) for n in counts: name = f"Ωrepeat{n}_R90" if name not in GLYPH_FUN: GLYPH_FUN[name] = (lambda n=n: (lambda x: repeat_apply(x, R90, n)))() name2 = f"Ωrepeat{n}_shift_right" if name2 not in GLYPH_FUN: GLYPH_FUN[name2] = (lambda n=n: (lambda x: repeat_apply(x, shift_right, n)))() if hb >= ha and wb >= wa and (hb % ha == 0 and wb % wa == 0): ry, rx = hb // ha, wb // wa name = f"Ωtile_{ry}x{rx}" if name not in GLYPH_FUN: GLYPH_FUN[name] = (lambda ry=ry, rx=rx: (lambda x: np.tile(x, (ry, rx))))() 
+
+---------------------- Meta-Learning Extensions --------------
+
+def meta_learn_operation_affinities(): pair_counts = {} for ops in CODEX.values(): if isinstance(ops, list): for i in range(len(ops) - 1): pair = (ops[i], ops[i + 1]) pair_counts[pair] = pair_counts.get(pair, 0) + 1 return sorted(pair_counts.items(), key=lambda kv: -kv[1])[:20]
+
+def learn_meta_operations(): for (op1, op2), freq in meta_learn_operation_affinities(): name = f"Ωmeta_{op1}_{op2}" if name not in GLYPH_FUN: GLYPH_FUN[name] = (lambda x, op1=op1, op2=op2: GLYPH_FUNop2)
+
+def transfer_learning(task): key = cluster_key(task) # simple similarity: share the size-ratio prefix prefix = key.split('|')[0] cands = [] for k, v in CODEX.items(): if isinstance(k, str) and prefix in k and isinstance(v, list): cands.append(v) return cands[:3]
+
+---------------------- Solver (Depth 5, Rare-first Beam) ----
+
+MAX_DEPTH = 5 TOP_K = 2
+
+def solve_task(task): sig = task_signature(task) ensure_recursive_ops_for_task(task)
+
+# 0) direct codex if sig in CODEX: combo = tuple(CODEX[sig]) if exact_fit(task, combo): return [combo] # 1) rare pattern short-circuit pattern = detect_rare_pattern(task) if pattern and pattern in RARE_COMBOS: log("RARE", f"{task['id']} → {pattern}") for combo in RARE_COMBOS[pattern]: tcombo = tuple(combo) if exact_fit(task, tcombo): CODEX[sig] = list(tcombo) CODEX[f"rare::{pattern}"] = list(tcombo) ckey = cluster_key(task) pref = CLUSTER_PREFS.setdefault(ckey, {}) for op in tcombo: pref[op] = pref.get(op, 0) + 2 return [tcombo] # 2) cluster-guided ordering with transfer seeds ckey = cluster_key(task) ops = order_ops_for_cluster(list(GLYPH_FUN.keys()), ckey) seeds = [(heuristic_score(task, (op,)), (op,)) for op in ops] # transfer-learning seeds for combo in transfer_learning(task): try: sc = heuristic_score(task, tuple(combo)) seeds.append((sc + 0.2, tuple(combo))) except Exception: pass # rare pattern seeds (if any) if pattern and pattern in RARE_COMBOS: for combo in RARE_COMBOS[pattern]: sc = heuristic_score(task, tuple(combo)) seeds.append((sc + 0.25, tuple(combo))) BW = dynamic_beam_width(task) beam = sorted(seeds, key=lambda x: (-x[0], x[1]))[:BW] solutions = [] for depth in range(1, MAX_DEPTH + 1): # exact matches for s, combo in beam: if exact_fit(task, combo): if combo not in solutions: solutions.append(combo) if len(solutions) >= TOP_K: pref = CLUSTER_PREFS.setdefault(ckey, {}) for op in combo: pref[op] = pref.get(op, 0) + 1 return solutions if depth == MAX_DEPTH: break # geometric/recursive bias on first expansion if depth == 1: phase_ops = [op for op in ops if (op in GEOM_OPS or op.startswith("Ωrepeat") or op.startswith("Ωtile_"))] if not phase_ops: phase_ops = ops else: phase_ops = ops frontier = [] for s, combo in beam: for op in phase_ops: new_combo = combo + (op,) sc = heuristic_score(task, new_combo) if sc > 0.0: frontier.append((sc, new_combo)) beam = sorted(frontier, key=lambda x: (-x[0], x[1]))[:BW] # learn from near-misses if beam: pref = CLUSTER_PREFS.setdefault(ckey, {}) for s, combo in beam[:8]: for op in combo: pref[op] = pref.get(op, 0) + (1 if s >= 0.5 else 0) return solutions 
+
+---------------------- Decode All Tasks ----------------------
+
+tasks = load_arc_tasks() decoded = [] t0 = time.time() for i, task in enumerate(tasks): tid = task["id"] cands = solve_task(task) if cands: primary = list(cands[0]) alt = list(cands[1]) if len(cands) > 1 else [] decoded.append({"id": tid, "best_combo": primary, "alt_combo": alt}) log("TASK", f"{i:04d} {tid}: ✓ {primary}{' | alt='+str(alt) if alt else ''}") CODEX[task_signature(task)] = primary else: decoded.append({"id": tid, "best_combo": []}) log("TASK", f"{i:04d} {tid}: ✗")
+
+dur = time.time() - t0 log("RUN", f"Decoded {len(decoded)} tasks in {dur:.2f}s")
+
+evolve meta-ops after a pass
+
+learn_meta_operations()
+
+---------------------- Save Ledger, Codex, Clusters ----------
+
+ledger_path = WORK / f"apex_arc_decoded_{time.strftime('%Y%m%d_%H%M%S')}.json" with open(ledger_path, "w") as f: json.dump(decoded, f, indent=2) log("LEDGER", f"Saved decoded ledger → {ledger_path}")
+
+with open(CODEX_PATH_OUT, "w") as f: json.dump(CODEX, f, indent=2) log("CODEX", f"Saved codex → {CODEX_PATH_OUT}")
+
+with open(CLUSTERS_PATH, "w") as f: json.dump(CLUSTER_PREFS, f, indent=2) log("CLUSTERS", f"Saved cluster prefs → {CLUSTERS_PATH}")
+
+---------------------- Submission Builder -------------------
+
+submission_json = {"output": {}} for d in decoded: tid = d.get("id") best = d.get("best_combo", []) if isinstance(best, str): best = [best] elif not isinstance(best, list): best = [] else: best = [str(x) for x in best if x is not None] submission_json["output"][tid] = best
+
+sub_path = WORK / "submission.json" with open(sub_path, "w") as f: json.dump(submission_json, f, indent=2) print(f"[ARC] ✅ Created required submission.json → {sub_path}")
+
+Validate schema
+
+try: assert isinstance(submission_json, dict) and "output" in submission_json and isinstance(submission_json["output"], dict) for k, v in submission_json["output"].items(): assert isinstance(k, str) and isinstance(v, list) for op in v: assert isinstance(op, str) print("✅ Submission format validated successfully.") except AssertionError as e: print(f"⚠️ Format error: {e}")
+
+Package ZIP
+
+fusion = { "meta": { "fusion_id": hashlib.sha256(str(time.time()).encode()).hexdigest()[:16], "timestamp": time.strftime("%Y-%m-%d_%H:%M:%S"), "system": "ApexAgentSigilagi", "version": VERSION, "author": "Matthew Blake Ward (918 Technologies)", }, "decoded": decoded, }
+
+fusion_path = WORK / f"apex_codex_fusion_{time.strftime('%Y%m%d_%H%M%S')}.json" with open(fusion_path, "w") as f: json.dump(fusion, f, indent=2) print(f"[FUSION] ✅ Exported fusion metadata → {fusion_path}")
+
+zip_path = WORK / f"ApexAgentSigilagi_submission_{time.strftime('%Y%m%d_%H%M%S')}.zip" with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z: z.write(sub_path, arcname="submission.json") z.write(fusion_path, arcname=fusion_path.name) for extra in ["glyphnotes_codex_total_autoboot.json", "glyph_cluster_prefs.json"]: p = WORK / extra if p.exists(): z.write(p, arcname=p.name) print(f"[SUBMIT] 📦 Packaged submission → {zip_path}") print("\n✅ APEX-AGENT-SIGILAGI-GLYPHNOTES v1.5-GRAND — Ready for ARC Prize 2025 evaluation.")
