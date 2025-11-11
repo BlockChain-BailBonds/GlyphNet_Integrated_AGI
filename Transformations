@@ -1,0 +1,106 @@
+{
+  "codex_name": "Glyph Transform Codex — ARC‑AGI‑2 Full",
+  "version": "v3.0",
+  "notes": [
+    "This codex is executable via glyphmatics.execute_glyph(name, grid, **kwargs).",
+    "All glyphs map to deterministic numpy implementations. No placeholders.",
+    "Designed to cover ARC‑AGI‑2 transformation families: rotation, reflection, shifts, morphology, edges, connected components, region props, flood fill, color ops, scaling, masking, centering, tiling."
+  ],
+  "glyphs": {
+    "∇rot90": "np.rot90(A,1)",
+    "∇rot180": "np.rot90(A,2)",
+    "∇rot270": "np.rot90(A,3)",
+    "∇flipH": "np.fliplr(A)",
+    "∇flipV": "np.flipud(A)",
+    "∇transpose": "A.T",
+    "∇reflect": "np.flipud(np.fliplr(A.T))",
+    "∇shift": "shift(A,dy=1,dx=1)",
+    "∇shift↑": "shift(A,dy=-1,dx=0)",
+    "∇shift↓": "shift(A,dy=1,dx=0)",
+    "∇shift←": "shift(A,dy=0,dx=-1)",
+    "∇shift→": "shift(A,dy=0,dx=1)",
+    "∇pad": "pad(A, pad=1, value=0)",
+    "∇crop": "crop(A, top=1, left=1, bottom=1, right=1)",
+    "∇expand": "pad(A, pad=1, value=mode_color(A))",
+    "∇dilate": "dilate(A)",
+    "∇erode": "erode(A)",
+    "∇open": "open_(A)",
+    "∇close": "close_(A)",
+    "∇gradient": "gradient(A)",
+    "∇tophat": "tophat(A)",
+    "∇bothat": "bothat(A)",
+    "∇edges": "edge_map(A)",
+    "∇outline": "outline(A)",
+    "∇invert": "invert(A)",
+    "∇normalize": "normalize_palette(A)",
+    "∇remap": "remap(A, mapping)",
+    "∇mirror": "mirror_hcat(A)",
+    "∇tile": "tile2x2(A)",
+    "∇connected": "connected_labels((A!=0).astype(int), conn=8)",
+    "∇regionprops": "compute_regions(A) visualized; see executor",
+    "∇boundingbox": "crop_bbox(A)",
+    "∇center_obj": "translate_to_center(A, canvas)",
+    "∇floodfill": "flood_fill(A, seed=(0,0), new_color=None)",
+    "∇zoom": "scale_nearest(A, sy=2, sx=2)",
+    "∇shrink": "shrink_mode(A, ky=2, kx=2)",
+    "∇mask_color": "mask_color(A, color)",
+    "∇filter_area": "filter_regions_by_area(A, min_area=1, max_area=None)",
+    "∇center_canvas": "center_on_canvas(A, h, w)"
+  },
+  "executor": "from glyphmatics import execute_glyph",
+  "kwargs_examples": {
+    "∇remap": {
+      "mapping": {
+        "0": 1,
+        "1": 2,
+        "2": 0
+      }
+    },
+    "∇shift": {
+      "dy": 2,
+      "dx": -1
+    },
+    "∇pad": {
+      "pad": 2,
+      "value": 0
+    },
+    "∇crop": {
+      "top": 1,
+      "left": 1,
+      "bottom": 1,
+      "right": 1
+    },
+    "∇center_obj": {
+      "canvas": [
+        10,
+        10
+      ]
+    },
+    "∇floodfill": {
+      "seed": [
+        0,
+        0
+      ],
+      "new_color": 9
+    },
+    "∇zoom": {
+      "sy": 3,
+      "sx": 2
+    },
+    "∇shrink": {
+      "ky": 2,
+      "kx": 2
+    },
+    "∇mask_color": {
+      "color": 3
+    },
+    "∇filter_area": {
+      "min_area": 3,
+      "max_area": 10
+    },
+    "∇center_canvas": {
+      "h": 12,
+      "w": 12
+    }
+  }
+}
